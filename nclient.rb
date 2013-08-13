@@ -1,31 +1,24 @@
 #!/usr/bin/env ruby
-# Ruby client using ncurses for the chat program
-# To use: ruby nclient.rb hostname port [username]
-# Should be used with corresponding server
-# Zachary Fletcher
 
 require 'ncurses'
 require 'socket'
-
-$disp = ['']*500
-$start = 0
-$connected = []
+require 'optparse'
 
 # Client side actions
 # Make a copy and modify it to your liking
-def interpret msg
+def interpret(three, connected, msg)
 	if /^!/ === msg
 		msg2 = msg.split(/\s/,2)
 		first = msg2[0]
 		rest = msg2[1]
 		case first
 		when '!join'
-			$connected << rest
-			draw_room
+			connected << rest
+			draw_room(three, connected)
 			msg = "#{rest} has joined the room"
 		when '!quit'
-			$connected.delete rest
-			draw_room
+			connected.delete rest
+			draw_room(three, connected)
 			msg = "#{rest} has left the room"
 		when '!public'
 			msg = "Room is now public"
@@ -48,31 +41,37 @@ def interpret msg
 			msg = "Ops: #{rest.split * ', '}"
 		when '!users'
 			msg = "Users: #{rest.split * ', '}"
+    when '!error'
+      msg = "Error: #{rest}"
+    when '!roll'
+      msg = rest
     end
 	end
 	return msg
 end
 
 # draws the users in the room
-def draw_room(start = 0)
-	$three.clear
- 	$three.border(*([0]*8))
-	$three.wrefresh
-	width = ($three.getmaxx-4)
+def draw_room(three, connected, start = 0)
+	three.clear
+ 	three.border(*([0]*8))
+	three.wrefresh
+	width = (three.getmaxx-4)
 	top = 1
-	start.upto($three.getmaxy-4) do |i|
-		$three.wmove(top,2)
-		if $connected[i]
-			$three.addstr($connected[i])
+	start.upto(three.getmaxy-4) do |i|
+		three.wmove(top,2)
+		if connected[i]
+			three.addstr(connected[i])
 		else
 			break
 		end
 		top += 1
 	end
-	$three.wrefresh
+	three.wrefresh
 end
 
-def read_line(y, x, window = Ncurses.stdscr, max_len = (window.getmaxx-x-1),string = "", cursor_pos = 0)
+# control the cursor and return the line of input when the
+# user presses 'enter'
+def read_line(y, x, window = Ncurses.stdscr, max_len = (window.getmaxx - x - 1), string = "", cursor_pos = 0)
 	window.clear
 	window.border(*([0]*8))
 	loop do
@@ -107,16 +106,16 @@ def read_line(y, x, window = Ncurses.stdscr, max_len = (window.getmaxx-x-1),stri
   end
 end
 
-# writes $disp[$start] to $disp[max] basically
-def write_all(window, max, bottom, start = $start)
+# writes disp[start] to disp[max] basically
+def write_all(window, max, bottom, disp, start)
   width = (window.getmaxx-4 )
 	i = start
 	carry = 0
 	carry_print = []
 	max.times do
-		if $disp[i].size > width
-			carry_print << ($disp[i][(carry...(carry+width))])
-			if ($disp[i].size - carry) > width
+		if disp[i].size > width
+			carry_print << (disp[i][(carry...(carry+width))])
+			if (disp[i].size - carry) > width
 				carry = carry+width
 				next
 			else
@@ -125,15 +124,15 @@ def write_all(window, max, bottom, start = $start)
 					window.addstr p
 					bottom -= 1
 				end
-				i = (i == $disp.size - 1) ? 0 : i + 1
+				i = (i == disp.size - 1) ? 0 : i + 1
 				carry = 0
 				carry_print = []
 				next
 			end
 		end
 		window.wmove(bottom,2)
-		window.addstr($disp[i])
-		i = (i == $disp.size - 1) ? 0 : i + 1
+		window.addstr(disp[i])
+		i = (i == disp.size - 1) ? 0 : i + 1
 		bottom -= 1
 	end
 	carry_print.reverse.each do |p|
@@ -143,61 +142,71 @@ def write_all(window, max, bottom, start = $start)
 	end
 end
 
-def draw_windows()
+def draw_windows(server, disp, start, connected)
 
 	one = Ncurses::WINDOW.new(Ncurses.LINES-3,Ncurses.COLS-12,0,0)
 	two = Ncurses::WINDOW.new(3,0,Ncurses.LINES-3,0)
-	$three = Ncurses::WINDOW.new(Ncurses.LINES-3,0,0,Ncurses.COLS-12)
+	three = Ncurses::WINDOW.new(Ncurses.LINES-3,0,0,Ncurses.COLS-12)
 
 	one.border(*([0]*8))
   two.border(*([0]*8))
-  $three.border(*([0]*8))
+  three.border(*([0]*8))
 	Ncurses.leaveok(one,true)
 	one.nodelay(true)
 	two.nodelay(true)
   two.move(1,2)
-	$three.wrefresh
+	three.wrefresh
 
 	Thread.new do
 		loop do
-			write_all(one,Ncurses.LINES-5,Ncurses.LINES-5)
+			write_all(one, Ncurses.LINES - 5, Ncurses.LINES - 5, disp, start)
 			two.move(1,2)
   		one.border(*([0]*8))
 			one.wrefresh
 			one.clear
-			msg = $server.gets.chomp
-			$start = ($start == 0) ? ($disp.size-1) : $start - 1
-			$disp[$start] = interpret(msg)
+			msg = server.gets.chomp
+			start = (start == 0) ? (disp.size-1) : start - 1
+			disp[start] = interpret(three, connected, msg)
 		end
 	end
 
   two.keypad(true)
 	loop do
 		inp = read_line(1,2,two)
-		$server.puts inp
+		server.puts inp
 		exit if inp == '/quit'
 	end
 end
 
 begin
 
-	if ARGV.size < 2
-		puts "Usage: ruby client.rb hostname hostport [username]"
-		exit
-	end
+  options = {
+    :hostname => 'localhost',
+    :port => '9281',
+  }
+
+  OptionParser.new do |opts|
+    opts.banner = "Usage: #{$PROGRAM_NAME} [options]"
+    opts.on('-h', '--hostname HOSTNAME', 'Hostname to connect to (defaults to localhost)') {|h| options[:hostname] = h}
+    opts.on('-p', '--port PORT', 'Port to connect to (defaults to 9281)') {|p| options[:port] = p}
+    opts.on('-n', '--nick NICK', 'Nick name to use (if left blank, you can choose on login)') {|n| options[:nick] = n}
+    opts.on('--help', 'Show this message') { puts opts; exit }
+    opts.parse!
+  end
 
   # initialize ncurses
   Ncurses.initscr
   Ncurses.cbreak
   Ncurses.noecho
 
-	$hostname = ARGV[0]
-	$port = ARGV[1].to_i
+	server = TCPSocket.open(options[:hostname], options[:port])
+	server.puts options[:nick] if options[:nick]
 
-	$server = TCPSocket.open($hostname, $port)
-	$server.puts ARGV[2] if ARGV[2]
-	$server.puts ARGV[3] if ARGV[3]
-	draw_windows()
+  disp = ['']*500
+  start = 0
+  connected = []
+
+	draw_windows(server, disp, start, connected)
 
 ensure
   Ncurses.endwin rescue ''
